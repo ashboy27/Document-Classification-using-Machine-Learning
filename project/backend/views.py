@@ -18,6 +18,7 @@ class FileUploadView(APIView):
 
         # Get classification options for user or fallback
         options_qs = ClassificationOption.objects.filter(user_id=user_id)
+        print(options_qs)
         if options_qs.exists():
             options = list(options_qs.values_list('name', flat=True))
             if len(options) < 3:
@@ -35,14 +36,15 @@ class FileUploadView(APIView):
                 for chunk in file.chunks():
                     destination.write(chunk)
 
-            # Classify the file
-            classification_result = file_classification(file_path, options)
-
+            # Get AI classification suggestion (don't save to DB yet)
+            suggested_classification = file_classification(file_path, options)
+            print(f"Suggested classification for {file.name}: {suggested_classification}")
+            # Save file info without classification (user will confirm later)
             file_info = FileInfo(
                 user_id=user_id,
                 file_name=file.name,
                 file_path=file_path,
-                classification=classification_result
+                classification=None  # Will be set when user confirms
             )
             file_info.save()
 
@@ -50,7 +52,8 @@ class FileUploadView(APIView):
                 "id": file_info.id,
                 "file_name": file.name,
                 "file_path": file_path,
-                "classification": classification_result
+                "suggested_classification": suggested_classification,
+                "classification": suggested_classification  # Show suggested for user confirmation
             })
 
         return Response({"uploaded_files": saved_files, "options_used": options}, status=status.HTTP_201_CREATED)
@@ -79,17 +82,29 @@ class FileListView(APIView):
         return Response({"files": data})
 
     def patch(self, request, *args, **kwargs):
-        # Update classification for a file
+        # Update classification for a file (user confirmation)
         file_id = request.data.get('id')
         new_classification = request.data.get('classification')
+        user_id = 1  # Placeholder for user ID
+        
         if not file_id or not new_classification:
             return Response({"error": "id and classification are required"}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            file_obj = FileInfo.objects.get(id=file_id, user_id=1)
+            file_obj = FileInfo.objects.get(id=file_id, user_id=user_id)
         except FileInfo.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Save the user-confirmed classification
         file_obj.classification = new_classification
         file_obj.save()
+        
+        # Add this classification to the user's options (if not already there)
+        if new_classification and new_classification.lower() != "none":
+            ClassificationOption.objects.get_or_create(
+                user_id=user_id,
+                name=new_classification
+            )
+        
         return Response({"message": "Classification updated", "id": file_obj.id, "classification": file_obj.classification})
 
     def delete(self, request, *args, **kwargs):
